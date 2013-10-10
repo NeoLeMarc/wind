@@ -1,0 +1,80 @@
+body	{ 
+	padding-left: 10px; 
+	padding-top: 10px;
+	padding-right: 10px;
+	padding-bottom: 10px;
+	margin: 0px; 
+	border: 0px; 
+	font-family: sans-serif;
+}
+
+a { 
+	text-decoration: none;
+}
+
+.mname {
+}
+
+.wname {
+	padding-top: 0.5em;
+}
+
+.wname a { 
+	font-size: 0.8em;
+	color: grey;
+}
+
+.wvalue {
+	font-size: 2em;
+	font-weight: bold;
+}
+
+.wvalue a {
+	color: black;
+}
+
+.wscale { 
+	font-size: 1em;
+}
+
+.wscale a {
+	color: black;
+}
+
+.wimg {
+}
+
+
+#temperature {
+	padding: 2em;
+	float:left;
+}
+
+#humidity {
+	padding: 2em;
+	float:left;
+}
+
+
+#wind {
+	padding: 2em;
+	float:left;
+}
+
+
+#rain {
+	padding: 2em;
+	float:left;
+}
+
+#pressure {
+	padding: 2em;
+	float:left;
+}
+
+#credits {
+	clear: both;
+	font-size: 0.7em;
+	color: grey;
+	float: right;
+}

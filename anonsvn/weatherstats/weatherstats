@@ -1,0 +1,547 @@
+#!/usr/bin/perl
+
+
+#
+# Run this periodicaly by cron as root
+#
+
+#
+# WeatherStats
+#
+# version:	0.6.7
+#
+# author:	Adam Pribyl, covex@lowlevel.cz
+# url: 		http://meteolinger.lowlevel.cz/
+# desc: 	perl scripts to save weather conditions from TOPCOM 265 NE Weather station into RRD tool chain
+# deps:		wwsr, perl, rrdtools (best >= 1.0.42)
+# lic:		GNU GPL
+# howto use:	call this every 2 minutes from crontab as root
+#
+
+sub help {
+    print "usage: \n";
+    print "	weatherstats -a <altitude>	reads out the data from the weather station and stores them in round robin database\n";
+    print "	weatherstats -a <altitude> -g	reads out the data and generates graphs\n";
+    exit(0);
+}
+
+sub callsys {
+    my @cmd = @_;
+    
+    # debug messages
+    if ( $en_dbg == 1 ) { 
+        $out = "";
+	print "---- DBG: WeatherStats: Issuing command:\n @cmd\n";
+    } else {
+	$out = "> /dev/null";
+    }
+    
+    system("@cmd $out");
+    my $err = $?/256;
+    if ( $err > 0 ) { die "ERROR: WeatherStats: System error nr. $err while executing @cmd" }
+}
+
+
+sub insertdb {
+	my $rrdbn = $_[0];
+	my $value = $_[1];
+	my $scale = $_[2];
+	my $wname = $_[3];
+	my $value_type = $rrdbn;
+
+	$tm = time;
+
+	$min = "U";
+	$max = "U"; #unlimited
+	if ($rrdbn =~ /temperature/) {
+	    $min = "-60";
+	    $max = "60";
+	    $value_type =~ s/temperature//g;
+	    $value_type =~ s/_//g;
+	    push(@{$temperature{$value_type}}, $wname);
+	    push(@{$temperature{$value_type}}, $value);
+	    push(@{$temperature{$value_type}}, $scale);
+	    $rrdbn = "temperature_".$value_type;
+	} elsif ($rrdbn eq "wind_speed" or $rrdbn eq "wind_gust") {
+	    $min = "0";
+	    $max = "25"; #m/s 90km/h, was 100> 330km/h
+	    $value_type =~ s/wind//g;
+	    $value_type =~ s/_//g;
+	    push(@{$wind{$value_type}}, $wname);
+	    push(@{$wind{$value_type}}, $value);
+	    push(@{$wind{$value_type}}, $scale);
+	    $rrdbn = "wind_".$value_type;
+	} elsif ($rrdbn eq "wind_direction") {
+	    $min = "0";
+	    $max = "15";
+	    $value_type =~ s/wind//g;
+	    $value_type =~ s/_//g;
+	    push(@{$wind{$value_type}}, $wname);
+	    push(@{$wind{$value_type}}, $value);
+	    push(@{$wind{$value_type}}, $scale);
+	    $rrdbn = "wind_".$value_type;
+	} elsif ($rrdbn =~ /humidity/) {
+	    $min = "0";
+	    $max = "100"; #%
+	    $value_type =~ s/humidity//g;
+	    $value_type =~ s/_//g;
+	    push(@{$humidity{$value_type}}, $wname);
+	    push(@{$humidity{$value_type}}, $value);
+	    push(@{$humidity{$value_type}}, $scale.$scale);
+	    $rrdbn = "humidity_".$value_type;
+	} elsif ($rrdbn eq "rain_1h") {
+	    $min = "0";
+	    $max = "100"; #mm/h
+	    $value_type =~ s/rain//g;
+	    $value_type =~ s/_//g;
+	    push(@{$rain{$value_type}}, $wname);
+	    push(@{$rain{$value_type}}, $value);
+	    push(@{$rain{$value_type}}, $scale);
+	    $rrdbn = "rain_".$value_type;
+	} elsif ($rrdbn eq "rain_total") {
+	    $min = "0";
+	    $max = "65535"; #mm
+	    $value_type =~ s/rain//g;
+	    $value_type =~ s/_//g;
+	    push(@{$rain{$value_type}}, $wname);
+	    push(@{$rain{$value_type}}, $value);
+	    push(@{$rain{$value_type}}, $scale);
+	    $rrdbn = "rain_".$value_type;
+	} elsif ($rrdbn =~ /pressure/) {
+	    $min = "800";
+	    $max = "1200";
+	    $value_type =~ s/pressure//g;
+	    $value_type =~ s/_//g;
+	    push(@{$pressure{$value_type}}, $wname);
+	    push(@{$pressure{$value_type}}, $value);
+	    push(@{$pressure{$value_type}}, $scale);
+	    $rrdbn = "pressure_".$value_type;
+	}
+
+	if ( !( -e $rrdbp.$rrdbn.".rrd") ) {
+		# every 120s (2min), 600s maximum interval between feeding data
+		# 1. AVERAGE, every 1st value, store 720 (30*24) values (1day)
+		# 2. AVERAGE, every 30th value (each hour), store 720 values (30days)
+		# 3. AVERAGE, every 720th value (each day), store 5*365 values (5 year)
+		# same for MAX values
+		&callsys($rrdtoolp." create ".$rrdbp.$rrdbn.".rrd --start $tm -s 120 \\
+			    DS:".$value_type.":GAUGE:600:".$min.":".$max." \\
+			    RRA:AVERAGE:0.5:1:720 \\
+			    RRA:AVERAGE:0.5:30:720 \\
+			    RRA:AVERAGE:0.5:720:1825 \\
+			    RRA:MAX:0.5:1:720 \\
+			    RRA:MAX:0.5:30:720 \\
+			    RRA:MAX:0.5:720:1825 \\
+		");
+#		print "Database $rrdbn created.\n";
+		return(0);
+	} else {
+		if ($min <= $value && $value <= $max) {
+			&callsys($rrdtoolp." update ".$rrdbp.$rrdbn.".rrd ".$tm.":".$value);
+		} else {
+			open (LOG, ">>$wwwdir"."log") || die "ERROR: no log";
+			print LOG $rrdbn." value ".$value." out of range\n";
+		}
+
+	};
+};
+
+
+sub create_graphs_for {
+	my %hasharray = %{$_[0]};
+	my $wname = $_[1];
+	my %gtimes = (
+		"24h" => 86400,
+		"30d" => 2592000,
+		"1y"  => 33868800,
+		"5y"  => 157680000 
+	);
+	my @color = ( "#dc0000", "#dc00dc", "#5800dc", "#009bdc", "#00dc87" );
+	my $coloridx = 0;
+	#			N	   NNE		NE	ENE	    E		ESE	 SE	    SSE		S	  SSW		SW	WSW		W	WNW	  NW		NNw
+	my @direction_cols = ( "#ff0000", "#ff6600", "#ffcc00", "#ccff00", "#66ff00", "#00ff00", "#00ff66", "#00ffcc", "#00ccff", "#0066ff", "#0000ff", "#6600ff", "#cc00ff", "#ff00cc", "#ff0066", "#ff0000");
+
+	foreach $gtime (keys %gtimes) {
+		$arguments = "";
+		$coloridx = 0;
+		$img = $wwwdir.$wname."_".$gtime.".gif";
+		$cmd_arguments = $rrdtoolp." graph ".$img." --start -".$gtimes{$gtime}." --width 550 --height 150 --vertical-label \"".ucfirst($wname)."\" --watermark \"WeatherStats\" \\"; #jak udelat scale?? --vertical-label".$scale\" \\";
+		if ($wname eq "pressure") { $cmd_arguments = $cmd_arguments."-A \\" } #scale na max a min hodnotu pro tlak
+
+		# compile the graphs arguments
+		if ($wname eq "temperature") {
+			foreach $atribute (keys %hasharray) {
+				if ($atribute =~ /out/) {
+					$scale = ${$hasharray{$atribute}}[2];
+					$arguments = $arguments."DEF:".$atribute."=".$rrdbp.$wname."_".$atribute.".rrd:".$atribute.":AVERAGE ";
+					$arguments = $arguments."LINE1:".$atribute.$color[$coloridx].":\"".${$hasharray{$atribute}}[0]."\" ";
+					$arguments = $arguments."GPRINT:".$atribute.":MIN:\"Min\\: %4.2lf \" ";
+					$arguments = $arguments."GPRINT:".$atribute.":AVERAGE:\"Avg\\: %4.2lf \" ";
+					$arguments = $arguments."GPRINT:".$atribute.":MAX:\"Max\\: %4.2lf ".$scale."\\j\" ";
+					$coloridx++;
+				}
+			}
+			$arguments = $arguments."HRULE:0#474747";
+			$cmd_arguments_tmp = $cmd_arguments;
+			$cmd_arguments_tmp =~ s/$gtime/out_$gtime/g;
+			&callsys($cmd_arguments_tmp.$arguments);
+			$arguments = "";
+			$coloridx = 0;
+			foreach $atribute (keys %hasharray) {
+				$scale = ${$hasharray{$atribute}}[2];
+				$arguments = $arguments."DEF:".$atribute."=".$rrdbp.$wname."_".$atribute.".rrd:".$atribute.":AVERAGE ";
+				$arguments = $arguments."LINE1:".$atribute.$color[$coloridx].":\"".${$hasharray{$atribute}}[0]."\" ";
+				$arguments = $arguments."GPRINT:".$atribute.":MIN:\"Min\\: %4.2lf \" ";
+				$arguments = $arguments."GPRINT:".$atribute.":AVERAGE:\"Avg\\: %4.2lf \" ";
+				$arguments = $arguments."GPRINT:".$atribute.":MAX:\"Max\\: %4.2lf ".$scale."\\j\" ";
+				$coloridx++;
+			}
+			$arguments = $arguments."HRULE:0#474747";
+		} elsif ($wname eq "wind") {
+			foreach $atribute (keys %hasharray) {
+				if ($atribute eq "direction") {
+					$scale = ${$hasharray{$atribute}}[2];
+					#if ($gtime eq "24h") {
+						$arguments = $arguments."DEF:".$atribute."=".$rrdbp.$wname."_".$atribute.".rrd:".$atribute.":AVERAGE ";
+					#} else {
+					#	$arguments = $arguments."DEF:".$atribute."=".$rrdbp.$wname."_".$atribute.".rrd:".$atribute.":MAX ";
+					#}
+					$arguments = $arguments."CDEF:North=".$atribute.",0,GE,-4,* ";
+					$arguments = $arguments."CDEF:NNE=".$atribute.",1,GE,-4,* ";
+					$arguments = $arguments."CDEF:NE=".$atribute.",2,GE,-4,* ";
+					$arguments = $arguments."CDEF:ENE=".$atribute.",3,GE,-4,* ";
+					$arguments = $arguments."CDEF:East=".$atribute.",4,GE,-4,* ";
+					$arguments = $arguments."CDEF:ESE=".$atribute.",5,GE,-4,* ";
+					$arguments = $arguments."CDEF:SE=".$atribute.",6,GE,-4,* ";
+					$arguments = $arguments."CDEF:SSE=".$atribute.",7,GE,-4,* ";
+					$arguments = $arguments."CDEF:South=".$atribute.",8,GE,-4,* ";
+					$arguments = $arguments."CDEF:SSW=".$atribute.",9,GE,-4,* ";
+					$arguments = $arguments."CDEF:SW=".$atribute.",10,GE,-4,* ";
+					$arguments = $arguments."CDEF:WSW=".$atribute.",11,GE,-4,* ";
+					$arguments = $arguments."CDEF:West=".$atribute.",12,GE,-4,* ";
+					$arguments = $arguments."CDEF:WNW=".$atribute.",13,GE,-4,* ";
+					$arguments = $arguments."CDEF:NW=".$atribute.",14,GE,-4,* ";
+					$arguments = $arguments."CDEF:NNW=".$atribute.",15,GE,-4,* ";
+					$arguments = $arguments."AREA:North".$direction_cols[0].":N ";
+					$arguments = $arguments."AREA:NNE".$direction_cols[1].": ";
+					$arguments = $arguments."AREA:NE".$direction_cols[2].":NE ";
+					$arguments = $arguments."AREA:ENE".$direction_cols[3].": ";
+					$arguments = $arguments."AREA:East".$direction_cols[4].":E ";
+					$arguments = $arguments."AREA:ESE".$direction_cols[5].": ";
+					$arguments = $arguments."AREA:SE".$direction_cols[6].":SE ";
+					$arguments = $arguments."AREA:SSE".$direction_cols[7].": ";
+					$arguments = $arguments."AREA:South".$direction_cols[8].":S ";
+					$arguments = $arguments."AREA:SSW".$direction_cols[9].": ";
+					$arguments = $arguments."AREA:SW".$direction_cols[10].":SW ";
+					$arguments = $arguments."AREA:WSW".$direction_cols[11].": ";
+					$arguments = $arguments."AREA:West".$direction_cols[12].":W ";
+					$arguments = $arguments."AREA:WNW".$direction_cols[13].": ";
+					$arguments = $arguments."AREA:NW".$direction_cols[14].":\"NW\\l\" ";
+					$arguments = $arguments."AREA:NNW".$direction_cols[15].": ";
+				} else {
+					$scale = ${$hasharray{$atribute}}[2];
+					$arguments = $arguments."DEF:".$atribute."=".$rrdbp.$wname."_".$atribute.".rrd:".$atribute.":MAX ";
+					$arguments = $arguments."LINE1:".$atribute.$color[$coloridx].":\"".${$hasharray{$atribute}}[0]."\" ";
+					$arguments = $arguments."GPRINT:".$atribute.":MIN:\"Min\\: %4.2lf \" ";
+					$arguments = $arguments."GPRINT:".$atribute.":AVERAGE:\"Avg\\: %4.2lf \" ";
+					$arguments = $arguments."GPRINT:".$atribute.":MAX:\"Max\\: %4.2lf ".$scale."\\j\" ";
+					$coloridx++;
+				}
+			}
+		} elsif ($wname eq "rain") {
+			foreach $atribute (keys %hasharray) {
+				if ($atribute eq "1h") {
+					$scale = ${$hasharray{$atribute}}[2];
+					$arguments = $arguments."DEF:".$atribute."=".$rrdbp.$wname."_".$atribute.".rrd:".$atribute.":AVERAGE ";
+					$arguments = $arguments."LINE1:".$atribute.$color[$coloridx].":\"".${$hasharray{$atribute}}[0]."\" ";
+					$arguments = $arguments."GPRINT:".$atribute.":MIN:\"Min\\: %4.2lf \" ";
+					$arguments = $arguments."GPRINT:".$atribute.":AVERAGE:\"Avg\\: %4.2lf \" ";
+					$arguments = $arguments."GPRINT:".$atribute.":MAX:\"Max\\: %4.2lf ".$scale."\\j\" ";
+					$coloridx++;
+					$cmd_arguments_tmp = $cmd_arguments;
+					$cmd_arguments_tmp =~ s/$gtime/1h_$gtime/g;
+					&callsys($cmd_arguments_tmp.$arguments);
+					$arguments = "";
+				} else {
+					$scale = ${$hasharray{$atribute}}[2];
+					$arguments = $arguments."DEF:".$atribute."=".$rrdbp.$wname."_".$atribute.".rrd:".$atribute.":AVERAGE ";
+					$arguments = $arguments."LINE1:".$atribute.$color[$coloridx].":\"".${$hasharray{$atribute}}[0]."\" ";
+					$arguments = $arguments."GPRINT:".$atribute.":MIN:\"Min\\: %4.2lf \" ";
+					$arguments = $arguments."GPRINT:".$atribute.":AVERAGE:\"Avg\\: %4.2lf \" ";
+					$arguments = $arguments."GPRINT:".$atribute.":MAX:\"Max\\: %4.2lf ".$scale."\\j\" ";
+					$coloridx++;
+				}
+			}
+		} else {
+			foreach $atribute (keys %hasharray) {
+				$scale = ${$hasharray{$atribute}}[2];
+				$arguments = $arguments."DEF:".$atribute."=".$rrdbp.$wname."_".$atribute.".rrd:".$atribute.":AVERAGE ";
+				$arguments = $arguments."LINE1:".$atribute.$color[$coloridx].":\"".${$hasharray{$atribute}}[0]."\" ";
+				$arguments = $arguments."GPRINT:".$atribute.":MIN:\"Min\\: %4.2lf \" ";
+				$arguments = $arguments."GPRINT:".$atribute.":AVERAGE:\"Avg\\: %4.2lf \" ";
+				$arguments = $arguments."GPRINT:".$atribute.":MAX:\"Max\\: %4.2lf ".$scale."\\j\" ";
+				$coloridx++;
+			}
+		}
+		&callsys($cmd_arguments.$arguments);
+	}
+}
+
+sub create_graphs {
+	&create_graphs_for(\%temperature, "temperature");
+	&create_graphs_for(\%humidity, "humidity");
+	&create_graphs_for(\%wind, "wind");
+	&create_graphs_for(\%rain, "rain");
+	&create_graphs_for(\%pressure, "pressure");
+}
+
+sub print_header {
+	open (INDEX, ">$wwwdir"."index\.html.new") || die "ERROR: WeatherStats: Could not create $wwwdir index.html.new";
+	print INDEX "<html>\n<head><title>Weather statistic from TOPCOM 265 NE</title>
+	    <link rel=\"StyleSheet\" href=\"styles.css\" type=\"text/css\" media=\"screen\">
+	    <link rel=\"icon\" href=\"meteolinger_icon.png\" type=\"image/png\">
+	    </head>\n<body>\n";
+	print INDEX "<h1>Weather statistic</h1>\n";
+	$date = `date`;
+	print INDEX "<p>Generated: ".$date."</p>\n";
+	print INDEX "<p>Station altitude: <span class=\"wvalue\">".$altitude."</span><span class=\"wscale\">mnm</span></p>\n";
+}
+
+sub print_footer {
+	print INDEX "<div id=\"credits\">WeatherStats - <a href=\"http://meteolinger.lowlevel.cz/\">http://meteolinger.lowlevel.cz/</a></div>\n";
+	print INDEX "</body></html>";
+	close INDEX;
+	open (INDEX, ">$wwwdir"."index\.html") || die "ERROR: WeatherStats: Could not create $wwwdir index.html";
+	open (INDEX_NEW, "$wwwdir"."index\.html.new") || die "ERROR: WeatherStats: Could not create $wwwdir index.html";
+	while (<INDEX_NEW>) { print INDEX $_ };
+	close INDEX_NEW;
+	close INDEX;
+	unlink "index.html.new";
+}
+
+sub print_body_line {
+	my @atribute = @_;
+	printf INDEX "<div>\n<div class=\"wname\"><a href=\"$atribute[0].html\">$atribute[1]</a></div>
+<span class=\"wvalue\"><a href=\"$atribute[0].html\">%.1f</a></span>
+<span class=\"wscale\"><a href=\"$atribute[0].html\">%s</a></span>\n</div>\n", $atribute[3], $atribute[4];
+}
+
+sub print_page {
+	my $page = $_[0];
+	open ( PAGE, ">$wwwdir".$page."\.html") || die "ERROR: WeatherStats: Could not create page $wwwdir $rrdbn";
+	print PAGE "<html>\n<head><title>Weather statistic from TOPCOM 265 NE</title>
+	    <link rel=\"StyleSheet\" href=\"styles.css\" type=\"text/css\" media=\"screen\">
+	    <link rel=\"icon\" href=\"meteolinger_icon.png\" type=\"image/png\">
+	    </head>\n<body>\n";
+	print PAGE "<h1>".ucfirst($page)."</h1>\n";
+	print PAGE "<img src=\"".$page."_24h.gif\"/><br />\n";
+	print PAGE "<img src=\"".$page."_30d.gif\"/><br />\n";
+	print PAGE "<img src=\"".$page."_1y.gif\"/><br />\n";
+	print PAGE "<img src=\"".$page."_5y.gif\"/><br />\n";
+	print PAGE "</body></html>";
+	close PAGE
+}
+
+sub print_body_begin {
+	my $wtype = $_[0];
+
+	print INDEX "<div id=\"".$wtype."\">\n";
+	print INDEX "<span class=\"wimg\"><a href=\"".$wtype.".html\"><img src=\"".$wtype."_24h.gif\" width=\"164\" /></a></span><br />\n";
+	print INDEX "<a class=\"mname\" href=\"".$wtype.".html\">".ucfirst($wtype)."</a><br/>\n";
+}
+
+sub print_body {
+
+
+	$wtype = "temperature";
+	&print_body_begin($wtype);
+	$wtype = "temperature_out";
+	&print_body_begin($wtype);
+	print INDEX "</div>\n";
+	&print_page($wtype);
+	$wtype = "temperature";
+	foreach $atribute (keys %temperature) {
+		&print_body_line($wtype,$atribute, ${$temperature{$atribute}}[0], ${$temperature{$atribute}}[1], ${$temperature{$atribute}}[2]);
+	}
+	print INDEX "</div>\n";
+	&print_page($wtype);
+
+	$wtype = "humidity";
+	&print_body_begin($wtype);
+	foreach $atribute (keys %humidity) {
+		&print_body_line($wtype, $atribute, ${$humidity{$atribute}}[0], ${$humidity{$atribute}}[1], ${$humidity{$atribute}}[2]);
+	}
+	print INDEX "</div>\n";
+	&print_page($wtype);
+
+	$wtype = "wind";
+	&print_body_begin($wtype);
+	foreach $atribute (keys %wind) {
+		&print_body_line($wtype, $atribute, ${$wind{$atribute}}[0], ${$wind{$atribute}}[1], ${$wind{$atribute}}[2]);
+	}
+	print INDEX "</div>\n";
+	&print_page($wtype);
+
+	$wtype = "rain";
+	&print_body_begin($wtype);
+	$wtype = "rain_1h";
+	&print_body_begin($wtype);
+	print INDEX "</div>\n";
+	&print_page($wtype);
+	$wtype = "rain";
+	foreach $atribute (keys %rain) {
+		&print_body_line($wtype, $atribute, ${$rain{$atribute}}[0], ${$rain{$atribute}}[1], ${$rain{$atribute}}[2]);
+	}
+	#http://vvv.chmi.cz/radarova-data-animace.html
+#	print INDEX "<div id=\"radar\"><a href=\"http://portal.chmi.cz/files/portal/docs/meteo/rad/data_jsradview.html\"><img src=\"radar_chmi/latest.gif\" width=\"200\" style=\"background: black\" /></a></div>";
+	print INDEX "</div>\n";
+	&print_page($wtype);
+
+	$wtype = "pressure";
+	&print_body_begin($wtype);
+	foreach $atribute (keys %pressure) {
+		&print_body_line("$wtype", $atribute, ${$pressure{$atribute}}[0], ${$pressure{$atribute}}[1], ${$pressure{$atribute}}[2]);
+	}
+	print INDEX "</div>\n";
+	&print_page($wtype);
+}
+
+
+
+#################
+##### MAIN ######
+#################
+
+### config section begin ###
+
+@wwsr = `./wwsr -y`;
+#@wwsr = `cat wwsr6.out`;
+#@wwsr = `tail -14 /var/www/html/wwss/log`;
+
+$wwwdir = "/var/www/html/wwss/";
+#$wwwdir = "wwss/";
+$en_dbg = 0;
+$rrdtoolp = "/usr/bin/rrdtool";
+$rrdbp = "/var/www/html/wwss/";
+#$rrdbp = "wwss/";
+
+### config section end ###
+
+$graphs = 0;
+
+# What options are defined on command line?
+if ( defined($ARGV[0]) ) {
+	for ($i = 0; $i < @ARGV; $i++) {
+		$argmnt = $ARGV[$i];
+		if ($argmnt eq "-g") {
+			$graphs = 1;
+		}
+		if ($argmnt eq "-a") {
+			if (defined ($ARGV[$i+1] and length($ARGV[$i+1] == 1)) ) {
+				$altitude = $ARGV[$i+1];
+				$i++;
+			} else { 
+				die "ERROR: Unknown or missing argument to -a"
+			}
+		}
+	}
+} else {
+	&help;
+};
+
+
+open (LOG, ">>$wwwdir"."log") || die "ERROR: no log";
+print LOG "------- ".`date`;
+for ($i=0;$i<=($#wwsr-1);$i++) {
+	print LOG $wwsr[$i];
+}
+close LOG;
+
+for ($i=0;$i<=($#wwsr-1);$i++) {
+    if ($wwsr[$i] =~ /^For postprocessing/) {
+	$wwsr[$i] = "";
+	last;
+    } else {
+	$wwsr[$i] = "";
+    }
+    if ($i==($#wwsr-1)) {
+	print INDEX "ERROR: wwsr output - for postprocessing sequence not found!</br>";
+	for ($ii=0;$ii<=($#wwsr-1);$ii++) { print INDEX $wwsr[$ii]."</br>"; }
+    }
+}
+
+
+# define main hashes for value groups
+%temperature = ();
+%pressure = ();
+%humidity = ();
+%wind = ();
+%rain = ();
+
+# store all values that wwsr returns
+foreach $line (@wwsr) {
+	chomp $line;
+	if ( $line ne "" ) {
+	    @aline = split ("\t", $line);
+		($value, $scale) = split (" ", $aline[1]);
+#		$value = $aline[$#aline]; #posledni prvek je hodnota
+
+		$rrdbn = $aline[0];
+		$rrdbn =~ s/ /_/g;
+		$rrdbn = lc($rrdbn);
+		
+		if ($rrdbn eq "interval") { next };
+
+		#The only difference if the order of words in wwsr output changes is, that the description of values in graphs is different. Values are processed correctly anyway.
+		&insertdb($rrdbn,$value,$scale,$aline[0]);
+#		&print_page($rrdbn,$aline[0]);
+#		&print_body($rrdbn,$value,$aline[0],$scale);
+	}
+};
+
+# additional calculated values
+$rrdbnt = "temperature_feel-out";
+$wname = "Feels like temperature";
+$value = ${$wind{'speed'}}[1];
+$tout = ${$temperature{'outdoor'}}[1];
+# windchill calculation is only valid for wind speed > 4.5km/h ~ 1.25m/s and $tout < 10C + avoid incorrect values
+if ($value > 1.25 and $value < 25 and $tout > -50 and $tout < 10) {
+        #Convert  $value=m/s  $ws=km/h
+        $ws=$value*3.6;
+        $ws = $ws**0.16;
+	#Wind chill
+	$twc = 13.12+(0.6215*$tout)-(11.37*($ws))+((0.3965*$tout)*($ws));
+} else {
+	$twc = $tout;
+}
+&insertdb($rrdbnt,$twc,"C",$wname);
+
+$rrdbnt = "pressure_air-sea";
+$wname = "Air pressure sea";
+$value = ${$pressure{'air'}}[1];
+$scale = ${$pressure{'air'}}[2];
+# aaMADIS calculation
+$k1 = 0.190284; # discrepency with calculated k1 probably because Smithsonian used less precise gas constant and gravity values
+$k2 = 8.4184960528E-5; # (standardLapseRate / standardTempK) * (Power(standardSLP, k1)
+$aps = ((($value-0.3)**$k1)+($k2*$altitude))**(1/$k1); # Power(Power(pressureHPa - 0.3, k1) + (k2 * elevationM), 1/k1);
+&insertdb($rrdbnt,$aps,$scale,$wname);
+
+$rrdbnt = "temperature_dew-out";
+$wname = "Dew point temperature";
+$value = ${$humidity{'outdoor'}}[1];
+if ($value <= 100) {
+	$tdp = $tout-((100-$value)/5); # aproximation
+} else {
+	$tdp = "U"; # unknown, the humidity reading is incorrect
+}
+&insertdb($rrdbnt,$tdp,"C",$wname);
+
+&print_header;
+&print_body;
+&print_footer;
+
+if ($graphs == 1) {
+	&create_graphs;
+}
+
+
