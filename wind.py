@@ -18,20 +18,25 @@ class ArrowSprite(pygame.sprite.Sprite):
         pygame.sprite.Sprite.__init__(self)
         self.src_image = pygame.image.load(image)
         self.position = position
-        self.direction = 0
+        self.direction = 1
         self.target_direction = 0
         self.move_to = 1
+        self.airspeed = 0
+        self.image = self.src_image
 
     def update(self, deltat):
         if self.direction != self.target_direction:
-           if ( (self.direction - self.target_direction) < 0 ):
-               self.move_to = 1
+           dir1 = (self.target_direction - self.direction)%360
+           dir2 = (self.direction - self.target_direction)%360
+           print "%s %s" % (dir1, dir2)
+           if (dir2 > dir1 ):
+               self.move_to = self.airspeed + 0.1
            else:
-               self.move_to = -1
+               self.move_to = -(self.airspeed + 0.1)
 
            self.direction = (self.direction + self.move_to)%360
            self.image = pygame.transform.rotate(self.src_image , self.direction)
-           print "Current: %s  - Target: %s" % (self.direction, self.target_direction)
+           print "Current: %s  - Target: %s - Speed: %s" % (self.direction, self.target_direction, self.airspeed)
 
         self.rect = self.image.get_rect()
         self.rect.center = self.position
@@ -39,9 +44,14 @@ class ArrowSprite(pygame.sprite.Sprite):
     def setTargetDirection(self, target_direction):
         self.target_direction = int(target_direction)
 
+    def setAirspeed(self, speed):
+        self.airspeed = float(speed) + 0.100001
+
 rect = screen.get_rect()
 arrow = ArrowSprite("arrow.png", rect.center)
-arrow_group = pygame.sprite.RenderPlain(arrow)
+arrow_shadow = ArrowSprite("shadow.png", rect.move(3,3).center)
+arrow_group = pygame.sprite.RenderPlain(arrow, arrow_shadow)
+
 
 def updateArrow():
     deltat = clock.tick(30)
@@ -64,6 +74,10 @@ while 1:
     tick += 1
 
     arrow.setTargetDirection(weather_info['angle'])
+    arrow.setAirspeed(weather_info['speed'])
+
+    arrow_shadow.setTargetDirection(weather_info['angle'])
+    arrow_shadow.setAirspeed(weather_info['speed'])
     updateArrow()
     
     if tick >= 180:
