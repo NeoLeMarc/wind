@@ -2,12 +2,13 @@ import pygame
 import pygame.time
 from pygame.locals import *
 import math
+import time
 
 clock = pygame.time.Clock()
 FRAMES_PER_SECOND = 30
 deltat = clock.tick(FRAMES_PER_SECOND)
 
-screen = pygame.display.set_mode((1024, 768), DOUBLEBUF)
+screen = pygame.display.set_mode((800, 600), DOUBLEBUF)
 
 screen.fill((0, 0, 0))
 pygame.display.flip()
@@ -23,20 +24,29 @@ class ArrowSprite(pygame.sprite.Sprite):
         self.move_to = 1
         self.airspeed = 0
         self.image = self.src_image
+        self.cache = {}
+        self.has_changed = 0
+
+    def getCache(self, direction, function):
+        if not self.cache.has_key(direction):
+            self.cache[direction] = function()
+        return self.cache[direction]
+            
 
     def update(self, deltat):
         if self.direction != self.target_direction:
+           self.has_changed = 1
            dir1 = (self.target_direction - self.direction)%360
            dir2 = (self.direction - self.target_direction)%360
-           print "%s %s" % (dir1, dir2)
            if (dir2 > dir1 ):
-               self.move_to = self.airspeed + 0.1
+               self.move_to = self.airspeed 
            else:
-               self.move_to = -(self.airspeed + 0.1)
+               self.move_to = -(self.airspeed)
 
-           self.direction = (self.direction + self.move_to)%360
-           self.image = pygame.transform.rotate(self.src_image , self.direction)
-           print "Current: %s  - Target: %s - Speed: %s" % (self.direction, self.target_direction, self.airspeed)
+           self.direction = int((self.direction + self.move_to)%360)
+           self.image = self.getCache(self.direction, lambda : pygame.transform.rotate(self.src_image , self.direction))
+        else:
+            self.has_changed = 0
 
         self.rect = self.image.get_rect()
         self.rect.center = self.position
@@ -45,20 +55,26 @@ class ArrowSprite(pygame.sprite.Sprite):
         self.target_direction = int(target_direction)
 
     def setAirspeed(self, speed):
-        self.airspeed = float(speed) + 0.100001
+        self.airspeed = float(speed) + 1
+
+    def getHasChanged(self):
+        return self.has_changed
 
 rect = screen.get_rect()
 arrow = ArrowSprite("arrow.png", rect.center)
 arrow_shadow = ArrowSprite("shadow.png", rect.move(3,3).center)
+#arrow_group = pygame.sprite.RenderPlain(arrow)
 arrow_group = pygame.sprite.RenderPlain(arrow, arrow_shadow)
-
+pygame.display.flip()
 
 def updateArrow():
-    deltat = clock.tick(30)
-    screen.fill((0,0,255))
+    deltat = clock.tick(FRAMES_PER_SECOND)
     arrow_group.update(deltat)
-    arrow_group.draw(screen)
-    pygame.display.flip()
+    if arrow.getHasChanged():
+        screen.fill((0,0,255))
+        arrow_group.draw(screen)
+    #pygame.display.flip()
+    pygame.display.update(arrow.rect)
 
 
 from weather import Weather
@@ -71,14 +87,16 @@ while 1:
         weather_info = weather.getWeatherInfo()
         weather.update()
 
+        arrow.setTargetDirection(weather_info['angle'])
+        arrow.setAirspeed(weather_info['speed'])
+
+        arrow_shadow.setTargetDirection(weather_info['angle'])
+        arrow_shadow.setAirspeed(weather_info['speed'])
+
     tick += 1
 
-    arrow.setTargetDirection(weather_info['angle'])
-    arrow.setAirspeed(weather_info['speed'])
-
-    arrow_shadow.setTargetDirection(weather_info['angle'])
-    arrow_shadow.setAirspeed(weather_info['speed'])
     updateArrow()
+    time.sleep(1/FRAMES_PER_SECOND)
     
     if tick >= 180:
         tick = 0
