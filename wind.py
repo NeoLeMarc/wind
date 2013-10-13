@@ -3,19 +3,20 @@ import pygame.time
 from pygame.locals import *
 import math
 import time
+import sys
 
 clock = pygame.time.Clock()
 FRAMES_PER_SECOND = 30
 deltat = clock.tick(FRAMES_PER_SECOND)
 
-screen = pygame.display.set_mode((800, 600), DOUBLEBUF)
+screen = pygame.display.set_mode((1024, 768), DOUBLEBUF)
 
 screen.fill((0, 0, 0))
 pygame.display.flip()
 
 class ArrowSprite(pygame.sprite.Sprite):
 
-    def __init__(self, image, position):
+    def __init__(self, image, position, name):
         pygame.sprite.Sprite.__init__(self)
         self.src_image = pygame.image.load(image)
         self.position = position
@@ -26,12 +27,16 @@ class ArrowSprite(pygame.sprite.Sprite):
         self.image = self.src_image
         self.cache = {}
         self.has_changed = 0
+        self.name = name
 
     def getCache(self, direction, function):
-        if not self.cache.has_key(direction):
-            self.cache[direction] = function()
-        return self.cache[direction]
-            
+        try:
+            image = pygame.image.load("cache/%s_%i.tga" % (self.name, direction))
+        except:
+            image = function()
+            pygame.image.save(self.image, "cache/%s_%i.tga" % (self.name, direction))
+        return image
+
 
     def update(self, deltat):
         if self.direction != self.target_direction:
@@ -61,8 +66,8 @@ class ArrowSprite(pygame.sprite.Sprite):
         return self.has_changed
 
 rect = screen.get_rect()
-arrow = ArrowSprite("arrow.png", rect.center)
-arrow_shadow = ArrowSprite("shadow.png", rect.move(3,3).center)
+arrow = ArrowSprite("arrow.png", rect.center, "arrow")
+arrow_shadow = ArrowSprite("shadow.png", rect.move(3,3).center, "shadow")
 #arrow_group = pygame.sprite.RenderPlain(arrow)
 arrow_group = pygame.sprite.RenderPlain(arrow, arrow_shadow)
 pygame.display.flip()
@@ -96,6 +101,7 @@ while 1:
     tick += 1
 
     updateArrow()
+    pygame.image.save(screen, "cache/screen_%i.tga" % (int(arrow.direction)))
     time.sleep(1/FRAMES_PER_SECOND)
     
     if tick >= 180:
