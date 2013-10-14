@@ -9,9 +9,11 @@ clock = pygame.time.Clock()
 FRAMES_PER_SECOND = 30
 deltat = clock.tick(FRAMES_PER_SECOND)
 
-screen = pygame.display.set_mode((1024, 768), DOUBLEBUF)
+screen = pygame.display.set_mode((640, 480), DOUBLEBUF)
 
-screen.fill((0, 0, 0))
+background = pygame.image.load("hintergrund.png")
+#screen.fill((0, 0, 0))
+screen.blit(background, (0,0))
 pygame.display.flip()
 
 class ArrowSprite(pygame.sprite.Sprite):
@@ -76,7 +78,8 @@ def updateArrow():
     deltat = clock.tick(FRAMES_PER_SECOND)
     arrow_group.update(deltat)
     if arrow.getHasChanged():
-        screen.fill((0,0,255))
+        screen.blit(background, (0,0))
+        #screen.fill((0,0,255))
         arrow_group.draw(screen)
     #pygame.display.flip()
     pygame.display.update(arrow.rect)

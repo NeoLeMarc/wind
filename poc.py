@@ -14,10 +14,10 @@ while i <= 359:
 	print "Filling cache: %i" %i
 
 clock = pygame.time.Clock()
-FRAMES_PER_SECOND = 8 
+FRAMES_PER_SECOND = 20 
 deltat = clock.tick(FRAMES_PER_SECOND)
 
-screen = pygame.display.set_mode((1024, 768), FULLSCREEN)
+screen = pygame.display.set_mode((640, 480))
 
 screen.fill((0, 0, 0))
 pygame.display.flip()
