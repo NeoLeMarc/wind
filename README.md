@@ -1,0 +1,2 @@
+# Wind
+This is the sourcecode of an raspberry PI project I did back in 2013 for [Lisa Weber](http://www.lisaweber.net). It was a display for a wireless wind sensor that was installed on top of a church. The idea was, that you where in a room without windows and without the possibility to directly experience the weather outside. But there was a display showing an arrow that indicated the direction and speed of the wind. The actual weather data is collected via an WS-0101 weather station connected via USB.
